@@ -47,11 +47,19 @@ export async function GET(request) {
 
   try {
     const tokenUrl = 'https://toolost.com/oauth/token';
+    const clientId = process.env.CLIENT_ID?.trim();
+    const clientSecret = process.env.CLIENT_SECRET?.trim();
+    const redirectUri = process.env.REDIRECT_URI?.trim();
+
+    if (!clientId || !redirectUri) {
+      throw new Error('Missing OAuth configuration: CLIENT_ID and REDIRECT_URI must be set');
+    }
+
     const params = new URLSearchParams({
       grant_type: 'authorization_code',
-      client_id: process.env.CLIENT_ID,
-      client_secret: process.env.CLIENT_SECRET,
-      redirect_uri: process.env.REDIRECT_URI,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
       code: code,
       code_verifier: verifier,
     });
@@ -59,11 +67,11 @@ export async function GET(request) {
     console.log('[OAuth Callback] Exchanging code at:', tokenUrl);
     console.log('[OAuth Callback] Token request params (no secret):', {
       grant_type: 'authorization_code',
-      client_id: process.env.CLIENT_ID,
-      redirect_uri: process.env.REDIRECT_URI,
+      client_id,
+      redirect_uri: redirectUri,
       has_code: !!code,
       has_verifier: !!verifier,
-      has_secret: !!process.env.CLIENT_SECRET,
+      has_secret: !!clientSecret,
     });
 
     const response = await fetch(tokenUrl, {

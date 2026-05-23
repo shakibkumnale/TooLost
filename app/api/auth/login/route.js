@@ -27,8 +27,12 @@ export async function GET(request) {
   };
   await session.save();
 
-  const clientId = process.env.CLIENT_ID;
-  const redirectUri = process.env.REDIRECT_URI;
+  const clientId = process.env.CLIENT_ID?.trim();
+  const redirectUri = process.env.REDIRECT_URI?.trim();
+  
+  if (!clientId || !redirectUri) {
+    throw new Error('Missing OAuth configuration: CLIENT_ID and REDIRECT_URI must be set');
+  }
   
   const scopes = [
     'read:profile',
