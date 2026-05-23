@@ -1,5 +1,8 @@
 import { fetchTooLost } from '@/lib/toolost-api';
 
+export const dynamic = 'force-dynamic';
+
+
 export async function GET(request) {
   try {
     const response = await fetchTooLost('/me');
