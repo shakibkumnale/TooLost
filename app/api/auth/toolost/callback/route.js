@@ -47,28 +47,34 @@ export async function GET(request) {
 
   try {
     const tokenUrl = 'https://toolost.com/oauth/token';
-    const clientId = process.env.CLIENT_ID?.trim();
-    const clientSecret = process.env.CLIENT_SECRET?.trim();
-    const redirectUri = process.env.REDIRECT_URI?.trim();
+    // Sanitize all env vars — strip whitespace, newlines, carriage returns
+    const sanitize = (val) => val?.replace(/[\r\n\t\s]+/g, '').trim() ?? '';
+    const clientId = sanitize(process.env.CLIENT_ID);
+    const clientSecret = sanitize(process.env.CLIENT_SECRET);
+    const redirectUri = sanitize(process.env.REDIRECT_URI);
 
     if (!clientId || !redirectUri) {
       throw new Error('Missing OAuth configuration: CLIENT_ID and REDIRECT_URI must be set');
     }
 
-    const params = new URLSearchParams({
+    // Build params object — only include defined, non-empty values
+    const rawParams = {
       grant_type: 'authorization_code',
       client_id: clientId,
-      client_secret: clientSecret,
       redirect_uri: redirectUri,
       code: code,
-      code_verifier: verifier,
-    });
+      // Include client_secret for confidential clients
+      ...(clientSecret ? { client_secret: clientSecret } : {}),
+      // Include PKCE verifier if present (public clients or confidential + PKCE)
+      ...(verifier ? { code_verifier: verifier } : {}),
+    };
+    const params = new URLSearchParams(rawParams);
 
     console.log('[OAuth Callback] Exchanging code at:', tokenUrl);
-    console.log('[OAuth Callback] Token request params (no secret):', {
+    console.log('[OAuth Callback] Token request params:', {
       grant_type: 'authorization_code',
-      client_id,
-      redirect_uri: redirectUri,
+      client_id: clientId,
+      redirect_uri: redirectUri,  // should have NO trailing newline
       has_code: !!code,
       has_verifier: !!verifier,
       has_secret: !!clientSecret,
@@ -76,7 +82,11 @@ export async function GET(request) {
 
     const response = await fetch(tokenUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+        'User-Agent': 'TooLostDashboard/1.0',
+      },
       body: params.toString(),
     });
 

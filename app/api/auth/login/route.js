@@ -27,8 +27,10 @@ export async function GET(request) {
   };
   await session.save();
 
-  const clientId = process.env.CLIENT_ID?.trim();
-  const redirectUri = process.env.REDIRECT_URI?.trim();
+  // Sanitize env vars — strip whitespace, newlines, carriage returns
+  const sanitize = (val) => val?.replace(/[\r\n\t\s]+/g, '').trim() ?? '';
+  const clientId = sanitize(process.env.CLIENT_ID);
+  const redirectUri = sanitize(process.env.REDIRECT_URI);
   
   if (!clientId || !redirectUri) {
     throw new Error('Missing OAuth configuration: CLIENT_ID and REDIRECT_URI must be set');
