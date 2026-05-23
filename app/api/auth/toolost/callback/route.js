@@ -32,12 +32,10 @@ export async function GET(request) {
 
   // Validate state (CSRF protection)
   const savedState = session.oauth?.state;
-  const verifier = session.oauth?.code_verifier;
 
   console.log('[OAuth Callback] State check:', {
     receivedState: state,
     savedState,
-    hasVerifier: !!verifier,
   });
 
   if (!savedState || state !== savedState) {
@@ -47,45 +45,31 @@ export async function GET(request) {
 
   try {
     const tokenUrl = 'https://toolost.com/oauth/token';
-    // Sanitize all env vars — strip whitespace, newlines, carriage returns
-    const sanitize = (val) => val?.replace(/[\r\n\t\s]+/g, '').trim() ?? '';
-    const clientId = sanitize(process.env.CLIENT_ID);
-    const clientSecret = sanitize(process.env.CLIENT_SECRET);
-    const redirectUri = sanitize(process.env.REDIRECT_URI);
+    const clientId = 'a1d45991-036b-4de2-b7bd-f0e1e60a33df';
+    const clientSecret = 'oDJ4MAklFLPZVk4xV6WlX7FChKPp2ydt4yv0uzI1';
+    const redirectUri = 'https://dashboard.souldistribution.in/api/auth/toolost/callback';
 
-    if (!clientId || !redirectUri) {
-      throw new Error('Missing OAuth configuration: CLIENT_ID and REDIRECT_URI must be set');
-    }
-
-    // Build params object — only include defined, non-empty values
-    const rawParams = {
+    // Confidential client — use client_secret, no PKCE
+    const params = new URLSearchParams({
       grant_type: 'authorization_code',
       client_id: clientId,
+      client_secret: clientSecret,
       redirect_uri: redirectUri,
       code: code,
-      // Include client_secret for confidential clients
-      ...(clientSecret ? { client_secret: clientSecret } : {}),
-      // Include PKCE verifier if present (public clients or confidential + PKCE)
-      ...(verifier ? { code_verifier: verifier } : {}),
-    };
-    const params = new URLSearchParams(rawParams);
+    });
 
     console.log('[OAuth Callback] Exchanging code at:', tokenUrl);
-    console.log('[OAuth Callback] Token request params:', {
-      grant_type: 'authorization_code',
-      client_id: clientId,
-      redirect_uri: redirectUri,  // should have NO trailing newline
-      has_code: !!code,
-      has_verifier: !!verifier,
-      has_secret: !!clientSecret,
-    });
+    console.log('[OAuth Callback] Token request body:', params.toString());
 
     const response = await fetch(tokenUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json',
-        'User-Agent': 'TooLostDashboard/1.0',
+        'Accept': 'application/json, text/html;q=0.9, */*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'Origin': 'https://dashboard.souldistribution.in',
+        'Referer': 'https://dashboard.souldistribution.in/',
       },
       body: params.toString(),
     });
@@ -143,7 +127,7 @@ export async function GET(request) {
       console.warn('[OAuth Callback] Failed to fetch user profile:', meResponse.status, meError);
     }
 
-    // Clear OAuth PKCE state
+    // Clear OAuth state
     delete session.oauth;
     await session.save();
 

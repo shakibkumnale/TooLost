@@ -11,31 +11,16 @@ function base64UrlEncode(buffer) {
 export async function GET(request) {
   const session = await getSession();
 
-  // Generate PKCE values
-  const verifier = base64UrlEncode(crypto.randomBytes(32));
-  const challenge = base64UrlEncode(
-    crypto.createHash('sha256').update(verifier).digest()
-  );
-  
   // Generate random state for CSRF protection
   const state = base64UrlEncode(crypto.randomBytes(16));
 
-  // Save PKCE and state inside the encrypted cookie session
-  session.oauth = {
-    code_verifier: verifier,
-    state: state
-  };
+  // Save state in session (no PKCE for confidential clients)
+  session.oauth = { state };
   await session.save();
 
-  // Sanitize env vars — strip whitespace, newlines, carriage returns
-  const sanitize = (val) => val?.replace(/[\r\n\t\s]+/g, '').trim() ?? '';
-  const clientId = sanitize(process.env.CLIENT_ID);
-  const redirectUri = sanitize(process.env.REDIRECT_URI);
-  
-  if (!clientId || !redirectUri) {
-    throw new Error('Missing OAuth configuration: CLIENT_ID and REDIRECT_URI must be set');
-  }
-  
+  const clientId = 'a1d45991-036b-4de2-b7bd-f0e1e60a33df';
+  const redirectUri = 'https://dashboard.souldistribution.in/api/auth/toolost/callback';
+
   const scopes = [
     'read:profile',
     'read:catalog',
@@ -51,8 +36,7 @@ export async function GET(request) {
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('scope', scopes);
   authUrl.searchParams.set('state', state);
-  authUrl.searchParams.set('code_challenge', challenge);
-  authUrl.searchParams.set('code_challenge_method', 'S256');
+  // No code_challenge / code_challenge_method — confidential client uses client_secret
 
   return Response.redirect(authUrl.toString());
 }
