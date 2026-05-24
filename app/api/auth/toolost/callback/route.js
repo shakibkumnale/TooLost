@@ -8,7 +8,11 @@ import { getSession } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 
+// FIX 4 — redirect_uri must be character-for-character identical to the value
+// registered in the Too Lost Developer Portal: no trailing slash, no http,
+// no query params. Defined as a single constant so it can never drift.
 const REDIRECT_URI = 'https://dashboard.souldistribution.in/api/auth/toolost/callback';
+
 const TOKEN_URL = 'https://toolost.com/oauth/token';
 const ME_URL = 'https://api.toolost.com/v1/me';
 const STATE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
@@ -35,7 +39,7 @@ export async function GET(request) {
     return Response.redirect(`${appUrl}/?error=Missing+authorization+code`);
   }
 
-  // ── (a–c) Validate state (CSRF protection) ──────────────────────
+  // ── Validate state (CSRF protection) ─────────────────────────────
   const session = await getSession();
   const savedState = session.oauth?.state;
   const stateCreatedAt = session.oauth?.created_at;
@@ -54,10 +58,9 @@ export async function GET(request) {
   }
 
   try {
-    // ── (d) Clear the state immediately after validation ──────────
+    // ── Clear state immediately after validation ──────────────────
     delete session.oauth;
 
-    // ── (e) Exchange authorization code for tokens (server-side) ──
     const clientId = process.env.TOOLOST_CLIENT_ID;
     const clientSecret = process.env.TOOLOST_CLIENT_SECRET;
 
@@ -65,40 +68,55 @@ export async function GET(request) {
       throw new Error('Missing TOOLOST_CLIENT_ID or TOOLOST_CLIENT_SECRET env vars');
     }
 
-    const params = new URLSearchParams({
+    // FIX 1 — Body MUST be application/x-www-form-urlencoded, not JSON.
+    // URLSearchParams.toString() produces the correct encoded body string.
+    // Previously the Accept header was present but User-Agent was missing,
+    // which caused Cloudflare to classify the request as a bot and return 403.
+    const body = new URLSearchParams({
       grant_type: 'authorization_code',
       client_id: clientId,
       client_secret: clientSecret,
       redirect_uri: REDIRECT_URI,
       code,
-    });
+    }).toString();
 
+    // FIX 2 — Add User-Agent and Accept headers.
+    // Cloudflare/WAF blocks requests that look like automated scripts.
+    // A recognisable User-Agent and explicit Accept header bypass the block.
     const tokenResponse = await fetch(TOKEN_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': 'SoulDistribution/1.0',
       },
-      body: params.toString(),
+      body,
     });
 
-    // ── (f) Parse the token response ─────────────────────────────
-    const rawBody = await tokenResponse.text();
+    // FIX 3 — Detailed diagnostic logging BEFORE attempting JSON.parse.
+    // Previously we only logged the body on parse failure.
+    // Now we always log status + cf-ray + first 600 chars so the exact
+    // WAF rejection reason is visible in server logs on every failed attempt.
+    const rawText = await tokenResponse.text();
 
-    let tokenData;
-    try {
-      tokenData = JSON.parse(rawBody);
-    } catch {
-      console.error('[OAuth Callback] Token response is not JSON:', rawBody.slice(0, 300));
+    console.log('[TooLost token] status :', tokenResponse.status, tokenResponse.statusText);
+    console.log('[TooLost token] cf-ray  :', tokenResponse.headers.get('cf-ray') ?? 'n/a');
+    console.log('[TooLost token] content :', tokenResponse.headers.get('content-type') ?? 'n/a');
+    console.log('[TooLost token] body    :', rawText.slice(0, 600));
+
+    // Guard: if the response is not JSON (e.g. a Cloudflare HTML block page),
+    // redirect with a specific error code so it's easy to diagnose in logs.
+    if (!tokenResponse.ok || !rawText.trimStart().startsWith('{')) {
+      console.error('[OAuth Callback] Token exchange failed — non-JSON or error response');
       return Response.redirect(
-        `${appUrl}/?error=${encodeURIComponent(
-          `Token server returned non-JSON (HTTP ${tokenResponse.status})`
-        )}`
+        `${appUrl}/?error=${encodeURIComponent(`token_failed_${tokenResponse.status}`)}`
       );
     }
 
-    if (!tokenResponse.ok) {
-      console.error('[OAuth Callback] Token exchange failed:', tokenData);
+    const tokenData = JSON.parse(rawText);
+
+    if (!tokenData.access_token) {
+      console.error('[OAuth Callback] Token response missing access_token:', tokenData);
       return Response.redirect(
         `${appUrl}/?error=${encodeURIComponent(
           tokenData.error_description || tokenData.message || tokenData.error || 'Token exchange failed'
@@ -113,7 +131,7 @@ export async function GET(request) {
       tokenData.expires_in
     );
 
-    // ── (g) Store tokens in encrypted httpOnly session cookie ─────
+    // ── Store tokens in encrypted httpOnly session cookie ─────────
     session.tokens = {
       token_type: tokenData.token_type,
       access_token: tokenData.access_token,
@@ -122,12 +140,13 @@ export async function GET(request) {
       obtained_at: Date.now(),
     };
 
-    // Also fetch and cache the user profile while we have a fresh token
+    // Fetch and cache the user profile while we have a fresh token (non-blocking)
     try {
       const meResponse = await fetch(ME_URL, {
         headers: {
           Authorization: `Bearer ${tokenData.access_token}`,
           Accept: 'application/json',
+          'User-Agent': 'SoulDistribution/1.0',
         },
       });
 
@@ -144,7 +163,7 @@ export async function GET(request) {
 
     await session.save();
 
-    // ── (h) Redirect to /dashboard ───────────────────────────────
+    // ── Redirect to /dashboard ────────────────────────────────────
     console.log('[OAuth Callback] Session saved. Redirecting to /dashboard.');
     return Response.redirect(`${appUrl}/dashboard`);
   } catch (err) {

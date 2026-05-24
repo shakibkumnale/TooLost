@@ -17,7 +17,11 @@ export async function POST(request) {
 
     const response = await fetch('https://toolost.com/oauth/token', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+        'User-Agent': 'SoulDistribution/1.0',
+      },
       body: params.toString(),
     });
 
