@@ -27,9 +27,9 @@ export async function GET(request) {
 
   try {
     const tokenUrl = 'https://toolost.com/oauth/token';
-    const clientId = process.env.CLIENT_ID?.trim();
-    const clientSecret = process.env.CLIENT_SECRET?.trim();
-    const redirectUri = process.env.REDIRECT_URI?.trim();
+    const clientId = process.env.TOOLOST_CLIENT_ID?.trim();
+    const clientSecret = process.env.TOOLOST_CLIENT_SECRET?.trim();
+    const redirectUri = 'https://dashboard.souldistribution.in/api/auth/toolost/callback';
 
     if (!clientId || !redirectUri) {
       throw new Error('Missing OAuth configuration: CLIENT_ID and REDIRECT_URI must be set');

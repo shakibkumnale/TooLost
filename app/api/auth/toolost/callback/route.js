@@ -1,6 +1,17 @@
+// app/api/auth/toolost/callback/route.js
+// Handles the OAuth 2.0 callback from Too Lost.
+// Validates the state parameter (CSRF), exchanges the authorization code
+// for tokens server-side, stores everything in an encrypted httpOnly cookie,
+// and redirects to /dashboard.
+
 import { getSession } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
+
+const REDIRECT_URI = 'https://dashboard.souldistribution.in/api/auth/toolost/callback';
+const TOKEN_URL = 'https://toolost.com/oauth/token';
+const ME_URL = 'https://api.toolost.com/v1/me';
+const STATE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
@@ -9,134 +20,137 @@ export async function GET(request) {
   const error = searchParams.get('error');
   const errorDescription = searchParams.get('error_description');
 
-  console.log('[OAuth Callback] Received callback', {
-    hasCode: !!code,
-    hasState: !!state,
-    error,
-    errorDescription,
-  });
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
-  const session = await getSession();
-
+  // ── Handle provider errors ───────────────────────────────────────
   if (error) {
     console.error('[OAuth Callback] Provider returned error:', error, errorDescription);
     return Response.redirect(
-      `${process.env.NEXT_PUBLIC_APP_URL}/?error=${encodeURIComponent(error + ': ' + (errorDescription || ''))}`
+      `${appUrl}/?error=${encodeURIComponent(error + ': ' + (errorDescription || ''))}`
     );
   }
 
   if (!code) {
     console.error('[OAuth Callback] No authorization code in request');
-    return Response.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/?error=Missing+authorization+code`);
+    return Response.redirect(`${appUrl}/?error=Missing+authorization+code`);
   }
 
-  // Validate state (CSRF protection)
+  // ── (a–c) Validate state (CSRF protection) ──────────────────────
+  const session = await getSession();
   const savedState = session.oauth?.state;
-
-  console.log('[OAuth Callback] State check:', {
-    receivedState: state,
-    savedState,
-  });
+  const stateCreatedAt = session.oauth?.created_at;
 
   if (!savedState || state !== savedState) {
     console.error('[OAuth Callback] State mismatch — possible CSRF attack');
-    return Response.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/?error=State+mismatch+CSRF+detected`);
+    return Response.redirect(`${appUrl}/?error=State+mismatch+CSRF+detected`);
+  }
+
+  // Reject if the state cookie is older than 10 minutes
+  if (stateCreatedAt && Date.now() - stateCreatedAt > STATE_MAX_AGE_MS) {
+    console.error('[OAuth Callback] State expired (>10 min)');
+    delete session.oauth;
+    await session.save();
+    return Response.redirect(`${appUrl}/?error=Login+session+expired.+Please+try+again.`);
   }
 
   try {
-    const tokenUrl = 'https://toolost.com/oauth/token';
-    const clientId = 'a1d45991-036b-4de2-b7bd-f0e1e60a33df';
-    const clientSecret = 'oDJ4MAklFLPZVk4xV6WlX7FChKPp2ydt4yv0uzI1';
-    const redirectUri = 'https://dashboard.souldistribution.in/api/auth/toolost/callback';
+    // ── (d) Clear the state immediately after validation ──────────
+    delete session.oauth;
 
-    // Confidential client — use client_secret, no PKCE
+    // ── (e) Exchange authorization code for tokens (server-side) ──
+    const clientId = process.env.TOOLOST_CLIENT_ID;
+    const clientSecret = process.env.TOOLOST_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      throw new Error('Missing TOOLOST_CLIENT_ID or TOOLOST_CLIENT_SECRET env vars');
+    }
+
     const params = new URLSearchParams({
       grant_type: 'authorization_code',
       client_id: clientId,
       client_secret: clientSecret,
-      redirect_uri: redirectUri,
-      code: code,
+      redirect_uri: REDIRECT_URI,
+      code,
     });
 
-    console.log('[OAuth Callback] Exchanging code at:', tokenUrl);
-    console.log('[OAuth Callback] Token request body:', params.toString());
-
-    const response = await fetch(tokenUrl, {
+    const tokenResponse = await fetch(TOKEN_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json, text/html;q=0.9, */*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-        'Origin': 'https://dashboard.souldistribution.in',
-        'Referer': 'https://dashboard.souldistribution.in/',
+        Accept: 'application/json',
       },
       body: params.toString(),
     });
 
-    // Read raw text first — never assume JSON
-    const rawBody = await response.text();
+    // ── (f) Parse the token response ─────────────────────────────
+    const rawBody = await tokenResponse.text();
 
-    console.log('[OAuth Callback] Token response status:', response.status, response.statusText);
-    console.log('[OAuth Callback] Token response headers:', Object.fromEntries(response.headers.entries()));
-    console.log('[OAuth Callback] Token response raw body:', rawBody.substring(0, 500));
-
-    // Try to parse as JSON
     let tokenData;
     try {
       tokenData = JSON.parse(rawBody);
-    } catch (parseErr) {
-      console.error('[OAuth Callback] Response is not JSON. Full body:', rawBody);
+    } catch {
+      console.error('[OAuth Callback] Token response is not JSON:', rawBody.slice(0, 300));
       return Response.redirect(
-        `${process.env.NEXT_PUBLIC_APP_URL}/?error=${encodeURIComponent(
-          `Token server returned non-JSON (HTTP ${response.status}): ${rawBody.substring(0, 200)}`
+        `${appUrl}/?error=${encodeURIComponent(
+          `Token server returned non-JSON (HTTP ${tokenResponse.status})`
         )}`
       );
     }
 
-    if (!response.ok) {
+    if (!tokenResponse.ok) {
       console.error('[OAuth Callback] Token exchange failed:', tokenData);
       return Response.redirect(
-        `${process.env.NEXT_PUBLIC_APP_URL}/?error=${encodeURIComponent(
+        `${appUrl}/?error=${encodeURIComponent(
           tokenData.error_description || tokenData.message || tokenData.error || 'Token exchange failed'
         )}`
       );
     }
 
-    console.log('[OAuth Callback] Token exchange success. Token type:', tokenData.token_type, 'Expires in:', tokenData.expires_in);
+    console.log(
+      '[OAuth Callback] Token exchange success. Type:',
+      tokenData.token_type,
+      'Expires in:',
+      tokenData.expires_in
+    );
 
-    // Store tokens in encrypted session
-    session.tokens = tokenData;
+    // ── (g) Store tokens in encrypted httpOnly session cookie ─────
+    session.tokens = {
+      token_type: tokenData.token_type,
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token,
+      expires_in: tokenData.expires_in,
+      obtained_at: Date.now(),
+    };
 
-    // Fetch + cache user profile
-    const meResponse = await fetch('https://api.toolost.com/v1/me', {
-      headers: {
-        Authorization: `Bearer ${tokenData.access_token}`,
-        Accept: 'application/json',
-      },
-    });
+    // Also fetch and cache the user profile while we have a fresh token
+    try {
+      const meResponse = await fetch(ME_URL, {
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`,
+          Accept: 'application/json',
+        },
+      });
 
-    console.log('[OAuth Callback] /me response status:', meResponse.status);
-
-    if (meResponse.ok) {
-      const meData = await meResponse.json();
-      session.user = meData.data;
-      console.log('[OAuth Callback] User profile loaded:', meData.data?.email);
-    } else {
-      const meError = await meResponse.text();
-      console.warn('[OAuth Callback] Failed to fetch user profile:', meResponse.status, meError);
+      if (meResponse.ok) {
+        const meData = await meResponse.json();
+        session.user = meData.data;
+        console.log('[OAuth Callback] User profile cached:', meData.data?.email);
+      } else {
+        console.warn('[OAuth Callback] /me fetch failed:', meResponse.status);
+      }
+    } catch (meErr) {
+      console.warn('[OAuth Callback] /me fetch error (non-blocking):', meErr.message);
     }
 
-    // Clear OAuth state
-    delete session.oauth;
     await session.save();
 
-    console.log('[OAuth Callback] Session saved. Redirecting to dashboard.');
-    return Response.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard`);
+    // ── (h) Redirect to /dashboard ───────────────────────────────
+    console.log('[OAuth Callback] Session saved. Redirecting to /dashboard.');
+    return Response.redirect(`${appUrl}/dashboard`);
   } catch (err) {
     console.error('[OAuth Callback] Unhandled error:', err);
     return Response.redirect(
-      `${process.env.NEXT_PUBLIC_APP_URL}/?error=${encodeURIComponent(err.message)}`
+      `${appUrl}/?error=${encodeURIComponent(err.message)}`
     );
   }
 }

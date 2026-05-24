@@ -1,4 +1,4 @@
-import { fetchTooLost } from '@/lib/toolost-api';
+import { fetchTooLost } from '@/lib/toolost';
 
 export const dynamic = 'force-dynamic';
 

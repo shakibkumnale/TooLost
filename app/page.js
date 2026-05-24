@@ -48,7 +48,7 @@ function HomeContent() {
           )}
 
           <div style={ctaContainerStyle}>
-            <a href="/api/auth/login" id="connect-btn" className="btn btn-primary" style={ctaButtonStyle}>
+            <a href="/api/auth/toolost/login" id="connect-btn" className="btn btn-primary" style={ctaButtonStyle}>
               <span>Connect with Too Lost</span>
               <ArrowRight size={18} />
             </a>
