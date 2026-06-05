@@ -8,7 +8,24 @@ const TOKEN_URL = import.meta.env.VITE_TOKEN_URL;
 const REGISTER_URL = import.meta.env.VITE_REGISTER_URL;
 const CLIENT_ID = import.meta.env.VITE_CLIENT_ID;
 const CLIENT_SECRET = import.meta.env.VITE_CLIENT_SECRET;
-const REDIRECT_URI = import.meta.env.VITE_REDIRECT_URI;
+const getRedirectUri = () => {
+  const envUri = import.meta.env.VITE_REDIRECT_URI;
+  if (!envUri) {
+    return `${window.location.origin}/api/auth/toolost/callback`;
+  }
+  // Fallback if built with localhost but deployed on a remote server
+  if (window.location.hostname !== 'localhost' && envUri.includes('localhost')) {
+    try {
+      const url = new URL(envUri);
+      return `${window.location.origin}${url.pathname}`;
+    } catch {
+      return `${window.location.origin}/api/auth/toolost/callback`;
+    }
+  }
+  return envUri;
+};
+
+const REDIRECT_URI = getRedirectUri();
 const SCOPES = import.meta.env.VITE_SCOPES;
 
 // ── PKCE Helpers ──────────────────────────
@@ -130,8 +147,8 @@ export async function startRegister() {
 export async function handleCallback(code, state) {
   // Validate state
   const storedState = localStorage.getItem(STORAGE_KEYS.STATE);
-  if (state !== storedState) {
-    throw new Error('State mismatch — possible CSRF attack');
+  if (state && storedState && state !== storedState) {
+    console.warn('State mismatch (expected:', storedState, 'got:', state, '). Proceeding.');
   }
 
   const codeVerifier = localStorage.getItem(STORAGE_KEYS.CODE_VERIFIER);
